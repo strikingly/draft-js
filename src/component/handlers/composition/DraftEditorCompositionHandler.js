@@ -12,6 +12,7 @@
 'use strict';
 
 import type DraftEditor from 'DraftEditor.react';
+import type EditorStateType from 'EditorState';
 
 const DOMObserver = require('DOMObserver');
 const DraftModifier = require('DraftModifier');
@@ -24,6 +25,7 @@ const editOnSelect = require('editOnSelect');
 const getContentEditableContainer = require('getContentEditableContainer');
 const getDraftEditorSelection = require('getDraftEditorSelection');
 const getEntityKeyForSelection = require('getEntityKeyForSelection');
+const getWindowForNode = require('getWindowForNode');
 const nullthrows = require('nullthrows');
 
 const isIE = UserAgent.isBrowser('IE');
@@ -50,11 +52,251 @@ let resolved = false;
 let stillComposing = false;
 let domObserver = null;
 
+type CompositionDOMSelection = {
+  startOffset: number,
+  endOffset: number,
+};
+
+type CompositionSnapshot = {
+  editor: DraftEditor,
+  editorState: EditorStateType,
+  blockNode: ?HTMLElement,
+  blockText: ?string,
+  domSelection: ?CompositionDOMSelection,
+  composedText: ?string,
+};
+
+let compositionSnapshot: ?CompositionSnapshot = null;
+
 function startDOMObserver(editor: DraftEditor) {
   if (!domObserver) {
     domObserver = new DOMObserver(getContentEditableContainer(editor));
     domObserver.start();
   }
+}
+
+function findCompositionBlockNode(
+  node: ?Node,
+  container: HTMLElement,
+): ?HTMLElement {
+  let searchNode = node;
+  while (searchNode && searchNode !== container) {
+    if (
+      searchNode instanceof HTMLElement &&
+      searchNode.getAttribute('data-block') === 'true'
+    ) {
+      return searchNode;
+    }
+    searchNode = searchNode.parentNode;
+  }
+  return null;
+}
+
+function getCompositionBlockNode(
+  editor: DraftEditor,
+  editorState: EditorStateType,
+): ?HTMLElement {
+  const container = getContentEditableContainer(editor);
+  if (!container) {
+    return null;
+  }
+
+  const selection = getWindowForNode(container).getSelection();
+  if (selection && selection.rangeCount > 0) {
+    const blockNode = findCompositionBlockNode(selection.anchorNode, container);
+    if (blockNode) {
+      return blockNode;
+    }
+  }
+
+  const blockKey = editorState.getSelection().getAnchorKey();
+  if (!blockKey) {
+    return null;
+  }
+  const leaf = container.querySelector(`[data-offset-key^="${blockKey}-"]`);
+  return findCompositionBlockNode(leaf, container);
+}
+
+function getCompositionDOMSelection(
+  blockNode: HTMLElement,
+): ?CompositionDOMSelection {
+  const selection = getWindowForNode(blockNode).getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  if (!blockNode.contains(range.commonAncestorContainer)) {
+    return null;
+  }
+  try {
+    const startRange = range.cloneRange();
+    startRange.selectNodeContents(blockNode);
+    startRange.setEnd(range.startContainer, range.startOffset);
+    const startOffset = startRange.toString().length;
+
+    const endRange = range.cloneRange();
+    endRange.selectNodeContents(blockNode);
+    endRange.setEnd(range.endContainer, range.endOffset);
+    const endOffset = endRange.toString().length;
+
+    return {startOffset, endOffset};
+  } catch (_e) {
+    return null;
+  }
+}
+
+function getCompositionTextFromDOM(
+  startText: string,
+  endText: string,
+  domSelection: ?CompositionDOMSelection,
+): ?string {
+  if (
+    domSelection &&
+    domSelection.startOffset >= 0 &&
+    domSelection.startOffset <= domSelection.endOffset &&
+    domSelection.endOffset <= startText.length
+  ) {
+    const startPrefix = startText.slice(0, domSelection.startOffset);
+    const startSuffix = startText.slice(domSelection.endOffset);
+    const composedLength = Math.max(
+      0,
+      endText.length - startPrefix.length - startSuffix.length,
+    );
+    const composedText = endText.slice(
+      domSelection.startOffset,
+      domSelection.startOffset + composedLength,
+    );
+    if (composedText && endText === startPrefix + composedText + startSuffix) {
+      return composedText;
+    }
+  }
+
+  if (endText.length < startText.length) {
+    return null;
+  }
+
+  let prefixLength = 0;
+  const maxPrefixLength = Math.min(startText.length, endText.length);
+  while (
+    prefixLength < maxPrefixLength &&
+    startText[prefixLength] === endText[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < startText.length - prefixLength &&
+    suffixLength < endText.length - prefixLength &&
+    startText[startText.length - 1 - suffixLength] ===
+      endText[endText.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const composedText = endText.slice(
+    prefixLength,
+    endText.length - suffixLength,
+  );
+  if (!composedText) {
+    return null;
+  }
+
+  const rebuiltText =
+    startText.slice(0, prefixLength) +
+    composedText +
+    startText.slice(prefixLength);
+  return rebuiltText === endText ? composedText : null;
+}
+
+function captureCompositionSnapshot(editor: DraftEditor): ?CompositionSnapshot {
+  const editorState = editor._latestEditorState;
+  if (!editorState) {
+    return null;
+  }
+  const blockKey = editorState.getSelection().getAnchorKey();
+  if (!blockKey) {
+    return null;
+  }
+  const blockNode = getCompositionBlockNode(editor, editorState);
+  return {
+    editor,
+    editorState,
+    blockNode,
+    blockText: blockNode ? blockNode.textContent : null,
+    domSelection: blockNode ? getCompositionDOMSelection(blockNode) : null,
+    composedText: null,
+  };
+}
+
+function getComposedText(snapshot: CompositionSnapshot): ?string {
+  if (snapshot.composedText != null && snapshot.composedText !== '') {
+    return snapshot.composedText;
+  }
+  const {blockNode, blockText, domSelection} = snapshot;
+  if (!blockNode || typeof blockText !== 'string') {
+    return null;
+  }
+  const endText = blockNode.textContent || '';
+  return (
+    getCompositionTextFromDOM(blockText, endText, domSelection) ||
+    getCompositionTextFromDOM(blockText, endText)
+  );
+}
+
+function buildRepairedEditorState(
+  snapshot: CompositionSnapshot,
+  composedText: string,
+): ?EditorStateType {
+  if (!composedText) {
+    return null;
+  }
+
+  const prevEditorState = snapshot.editorState;
+  const prevSelection = prevEditorState.getSelection();
+  const prevContent = prevEditorState.getCurrentContent();
+  const anchorKey = prevSelection.getAnchorKey();
+  if (!anchorKey || prevSelection.getStartKey() !== prevSelection.getEndKey()) {
+    return null;
+  }
+  if (!prevContent.getBlockForKey(anchorKey)) {
+    return null;
+  }
+
+  const entityKey = getEntityKeyForSelection(prevContent, prevSelection);
+  const currentStyle = prevEditorState.getCurrentInlineStyle();
+  const contentWithText = prevSelection.isCollapsed()
+    ? DraftModifier.insertText(
+        prevContent,
+        prevSelection,
+        composedText,
+        currentStyle,
+        entityKey,
+      )
+    : DraftModifier.replaceText(
+        prevContent,
+        prevSelection,
+        composedText,
+        currentStyle,
+        entityKey,
+      );
+
+  const newOffset = prevSelection.getStartOffset() + composedText.length;
+  const newSelection = prevSelection.merge({
+    anchorOffset: newOffset,
+    focusOffset: newOffset,
+    isBackward: false,
+  });
+  const pushed = EditorState.push(
+    prevEditorState,
+    contentWithText,
+    'insert-characters',
+  );
+  const outOfComposition = EditorState.set(pushed, {
+    inCompositionMode: false,
+    nativelyRenderedContent: null,
+  });
+  return EditorState.forceSelection(outOfComposition, newSelection);
 }
 
 const DraftEditorCompositionHandler = {
@@ -65,6 +307,7 @@ const DraftEditorCompositionHandler = {
   onCompositionStart(editor: DraftEditor): void {
     stillComposing = true;
     startDOMObserver(editor);
+    compositionSnapshot = captureCompositionSnapshot(editor);
   },
 
   /**
@@ -81,9 +324,12 @@ const DraftEditorCompositionHandler = {
    * twice could break the DOM, we only use the first event. Example: Arabic
    * Google Input Tools on Windows 8.1 fires `compositionend` three times.
    */
-  onCompositionEnd(editor: DraftEditor): void {
+  onCompositionEnd(editor: DraftEditor, e: ?SyntheticCompositionEvent<>): void {
     resolved = false;
     stillComposing = false;
+    if (compositionSnapshot && e && e.data) {
+      compositionSnapshot.composedText = e.data;
+    }
     setTimeout(() => {
       if (!resolved) {
         DraftEditorCompositionHandler.resolveComposition(editor);
@@ -164,6 +410,7 @@ const DraftEditorCompositionHandler = {
     editor.exitCurrentMode();
 
     if (!mutations.size) {
+      compositionSnapshot = null;
       editor.update(editorState);
       return;
     }
@@ -224,6 +471,34 @@ const DraftEditorCompositionHandler = {
         currentContent: contentState,
       });
     });
+
+    const snapshot = compositionSnapshot;
+    compositionSnapshot = null;
+
+    if (snapshot) {
+      const composedText = getComposedText(snapshot);
+      if (composedText != null && composedText !== '') {
+        const repairedEditorState = buildRepairedEditorState(
+          snapshot,
+          composedText,
+        );
+        if (
+          repairedEditorState &&
+          !repairedEditorState
+            .getCurrentContent()
+            .getBlockMap()
+            .equals(contentState.getBlockMap())
+        ) {
+          // The browser sometimes commits composed text as a new text node
+          // whose nearest offset key is not the leaf containing the caret.
+          // Rebuild from the pre-composition snapshot instead of applying the
+          // misattributed mutation result.
+          editor.restoreEditorDOM();
+          editor.update(repairedEditorState);
+          return;
+        }
+      }
+    }
 
     // When we apply the text changes to the ContentState, the selection always
     // goes to the end of the field, but it should just stay where it is
