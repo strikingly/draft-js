@@ -23,8 +23,6 @@ const DraftEditorLeaf = require("./DraftEditorLeaf.react");
 
 const DraftOffsetKey = require("./DraftOffsetKey");
 
-const React = require("react");
-
 const Scroll = require("fbjs/lib/Scroll");
 
 const Style = require("fbjs/lib/Style");
@@ -46,6 +44,8 @@ const invariant = require("fbjs/lib/invariant");
 const isHTMLElement = require("./isHTMLElement");
 
 const nullthrows = require("fbjs/lib/nullthrows");
+
+const React = require("react");
 
 const SCROLL_BUFFER = 10;
 type Props = {

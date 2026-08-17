@@ -237,7 +237,7 @@ function addFocusToSelection(selection: SelectionObject, node: ?Node, offset: nu
         extraParams: JSON.stringify({
           activeElementName: activeElement ? activeElement.nodeName : null,
           nodeIsFocus: node === selection.focusNode,
-          nodeWasFocus: nodeWasFocus,
+          nodeWasFocus,
           selectionRangeCount: selection.rangeCount,
           selectionAnchorNodeName: selection.anchorNode ? selection.anchorNode.nodeName : null,
           selectionAnchorOffset: selection.anchorOffset,

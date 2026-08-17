@@ -25,11 +25,11 @@ const DraftEditorLeaf = require("./DraftEditorLeaf.react");
 
 const DraftOffsetKey = require("./DraftOffsetKey");
 
+const cx = require("fbjs/lib/cx");
+
 const Immutable = require("immutable");
 
 const React = require("react");
-
-const cx = require("fbjs/lib/cx");
 
 const {
   List

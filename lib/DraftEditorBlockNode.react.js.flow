@@ -28,8 +28,6 @@ const DraftEditorNode = require("./DraftEditorNode.react");
 
 const DraftOffsetKey = require("./DraftOffsetKey");
 
-const React = require("react");
-
 const Scroll = require("fbjs/lib/Scroll");
 
 const Style = require("fbjs/lib/Style");
@@ -45,6 +43,8 @@ const Immutable = require("immutable");
 const invariant = require("fbjs/lib/invariant");
 
 const isHTMLElement = require("./isHTMLElement");
+
+const React = require("react");
 
 const SCROLL_BUFFER = 10;
 const {

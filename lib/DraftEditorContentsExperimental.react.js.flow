@@ -25,9 +25,9 @@ const DraftEditorBlockNode = require("./DraftEditorBlockNode.react");
 
 const DraftOffsetKey = require("./DraftOffsetKey");
 
-const React = require("react");
-
 const nullthrows = require("fbjs/lib/nullthrows");
+
+const React = require("react");
 
 type Props = {
   blockRenderMap: DraftBlockRenderMap,
