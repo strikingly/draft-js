@@ -51,6 +51,7 @@ const RESOLVE_DELAY = 20;
 let resolved = false;
 let stillComposing = false;
 let domObserver = null;
+let resolveTimer = null;
 
 type CompositionDOMSelection = {
   startOffset: number,
@@ -305,6 +306,18 @@ const DraftEditorCompositionHandler = {
    * mode. Continue the current composition session to prevent a re-render.
    */
   onCompositionStart(editor: DraftEditor): void {
+    // A previous composition may still be pending inside the 20ms resolve
+    // window when the next composition starts (Korean/Japanese IMEs can
+    // commit and immediately begin a new session, e.g. when switching input
+    // modes or typing fast). If we simply overwrite the snapshot here, the
+    // old DOM observer keeps accumulating mutations while the new snapshot
+    // is captured, so the next resolveComposition rebuilds the state from a
+    // snapshot that does not match the mutations it applies. Settle the
+    // previous session first so each snapshot corresponds to one
+    // composition.
+    if (compositionSnapshot != null && !resolved) {
+      DraftEditorCompositionHandler.resolveComposition(editor);
+    }
     stillComposing = true;
     startDOMObserver(editor);
     compositionSnapshot = captureCompositionSnapshot(editor);
@@ -330,7 +343,10 @@ const DraftEditorCompositionHandler = {
     if (compositionSnapshot && e && e.data) {
       compositionSnapshot.composedText = e.data;
     }
-    setTimeout(() => {
+    if (resolveTimer != null) {
+      clearTimeout(resolveTimer);
+    }
+    resolveTimer = setTimeout(() => {
       if (!resolved) {
         DraftEditorCompositionHandler.resolveComposition(editor);
       }
@@ -402,6 +418,10 @@ const DraftEditorCompositionHandler = {
     const mutations = nullthrows(domObserver).stopAndFlushMutations();
     domObserver = null;
     resolved = true;
+    if (resolveTimer != null) {
+      clearTimeout(resolveTimer);
+      resolveTimer = null;
+    }
 
     let editorState = EditorState.set(lastEditorState, {
       inCompositionMode: false,
