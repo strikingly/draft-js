@@ -129,7 +129,7 @@ beforeEach(() => {
   compositionHandler = require('DraftEditorCompositionHandler');
   editor = {
     _latestEditorState: EditorState.createEmpty(),
-    _onCompositionStart: compositionHandler.onCompositionStart,
+    _onCompositionStart: () => compositionHandler.onCompositionStart(editor),
     _onKeyDown: jest.fn(),
     setMode: jest.fn(),
     restoreEditorDOM: jest.fn(),
@@ -259,6 +259,69 @@ test('Repairs composed text committed after a LINK entity', () => {
   expect(block.getEntityAt(4)).toBe(null);
 });
 
+test('Uses the DOM diff when compositionend data only contains the final syllable', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+});
+
+test('Resolves a Korean composition from the DOM when a keydown commits it', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+
+  compositionHandler.onKeyDown(editor, {
+    which: 32,
+    preventDefault: jest.fn(),
+  });
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+  expect(editor._onKeyDown).toHaveBeenCalled();
+});
+
 test('Repairs consecutive Korean compositions started before the previous resolve', () => {
   const {editorState, blockKey, entityKey} = getLinkEditorState();
   editor._latestEditorState = editorState;
@@ -290,6 +353,42 @@ test('Repairs consecutive Korean compositions started before the previous resolv
   expect(block.getEntityAt(3)).toBe(entityKey);
   expect(block.getEntityAt(4)).toBe(null);
   expect(block.getEntityAt(5)).toBe(null);
+});
+
+test('Keeps composite mode when a Korean composition starts before the previous resolve', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const mutations1 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations1,
+  );
+  editOnCompositionStart(editor, {});
+  blockNode.textContent = '你好链接\uD55C';
+  compositionHandler.onCompositionEnd(editor, {data: '\uD55C'});
+
+  editOnCompositionStart(editor, {});
+  expect(editor.exitCurrentMode).not.toHaveBeenCalled();
+
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  const mutations2 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations2,
+  );
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+  expect(editor.exitCurrentMode).toHaveBeenCalledTimes(1);
 });
 
 test('Repairs consecutive Japanese compositions started before the previous resolve', () => {

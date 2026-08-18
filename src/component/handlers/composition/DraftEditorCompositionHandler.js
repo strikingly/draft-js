@@ -231,18 +231,22 @@ function captureCompositionSnapshot(editor: DraftEditor): ?CompositionSnapshot {
 }
 
 function getComposedText(snapshot: CompositionSnapshot): ?string {
+  const {blockNode, blockText, domSelection} = snapshot;
+  if (blockNode && typeof blockText === 'string') {
+    const endText = blockNode.textContent || '';
+    const composedText =
+      getCompositionTextFromDOM(blockText, endText, domSelection) ||
+      getCompositionTextFromDOM(blockText, endText);
+    if (composedText != null && composedText !== '') {
+      return composedText;
+    }
+  }
+
   if (snapshot.composedText != null && snapshot.composedText !== '') {
     return snapshot.composedText;
   }
-  const {blockNode, blockText, domSelection} = snapshot;
-  if (!blockNode || typeof blockText !== 'string') {
-    return null;
-  }
-  const endText = blockNode.textContent || '';
-  return (
-    getCompositionTextFromDOM(blockText, endText, domSelection) ||
-    getCompositionTextFromDOM(blockText, endText)
-  );
+
+  return null;
 }
 
 function buildRepairedEditorState(
@@ -316,7 +320,7 @@ const DraftEditorCompositionHandler = {
     // previous session first so each snapshot corresponds to one
     // composition.
     if (compositionSnapshot != null && !resolved) {
-      DraftEditorCompositionHandler.resolveComposition(editor);
+      DraftEditorCompositionHandler.resolveComposition(editor, true);
     }
     stillComposing = true;
     startDOMObserver(editor);
@@ -409,7 +413,10 @@ const DraftEditorCompositionHandler = {
    * Resetting innerHTML will move focus to the beginning of the editor,
    * so we update to force it back to the correct place.
    */
-  resolveComposition(editor: DraftEditor): void {
+  resolveComposition(
+    editor: DraftEditor,
+    continueComposition: ?boolean,
+  ): void {
     if (stillComposing) {
       return;
     }
@@ -424,10 +431,12 @@ const DraftEditorCompositionHandler = {
     }
 
     let editorState = EditorState.set(lastEditorState, {
-      inCompositionMode: false,
+      inCompositionMode: continueComposition === true,
     });
 
-    editor.exitCurrentMode();
+    if (continueComposition !== true) {
+      editor.exitCurrentMode();
+    }
 
     if (!mutations.size) {
       compositionSnapshot = null;
@@ -498,10 +507,15 @@ const DraftEditorCompositionHandler = {
     if (snapshot) {
       const composedText = getComposedText(snapshot);
       if (composedText != null && composedText !== '') {
-        const repairedEditorState = buildRepairedEditorState(
+        let repairedEditorState = buildRepairedEditorState(
           snapshot,
           composedText,
         );
+        if (repairedEditorState && continueComposition === true) {
+          repairedEditorState = EditorState.set(repairedEditorState, {
+            inCompositionMode: true,
+          });
+        }
         if (
           repairedEditorState &&
           !repairedEditorState
