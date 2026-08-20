@@ -222,3 +222,26 @@ test('Korean composition committed via arrow keys keeps all composed text', () =
 
   assertCommittedText('你好链接한글', blockKey, entityKey);
 });
+
+test('Keeps all composed text when compositionstart repeats without an intervening compositionend', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+  const {container, textNode} = buildDOM(blockKey, '你好链接');
+  require('getContentEditableContainer').mockReturnValue(container);
+  placeCaret(textNode);
+
+  // Some IMEs fire a second compositionstart while the first session is
+  // still composing. The snapshot must not be overwritten, otherwise the
+  // DOM diff only covers the second session and drops the first.
+  compositionHandler.onCompositionStart(editor);
+  textNode.nodeValue = '你好链接한';
+  placeCaret(textNode);
+  compositionHandler.onCompositionStart(editor);
+  textNode.nodeValue = '你好链接한글';
+  placeCaret(textNode);
+  compositionHandler.onCompositionEnd(editor, {});
+  jest.runAllTimers();
+
+  assertCommittedText('你好链接한글', blockKey, entityKey);
+  expect(editor.exitCurrentMode).toHaveBeenCalledTimes(1);
+});
