@@ -494,3 +494,93 @@ test('Repairs composed text using the caret-anchored DOM diff', () => {
   expect(block.getEntityAt(3)).toBe(entityKey);
   expect(block.getEntityAt(4)).toBe(null);
 });
+
+test('Fallback DOM diff reconstructs a middle insertion without a DOM selection', () => {
+  let content = ContentState.createFromText('abcd');
+  const blockKey = content.getFirstBlock().getKey();
+  editor._latestEditorState = EditorState.forceSelection(
+    EditorState.createWithContent(content),
+    SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 2,
+      focusOffset: 2,
+    }),
+  );
+
+  const container = document.createElement('div');
+  const blockNode = document.createElement('div');
+  blockNode.setAttribute('data-block', 'true');
+  blockNode.setAttribute('data-offset-key', `${blockKey}-0-0`);
+  blockNode.textContent = 'abcd';
+  container.appendChild(blockNode);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const selection = window.getSelection();
+  if (selection) {
+    selection.removeAllRanges();
+  }
+
+  const mutations = Map({[`${blockKey}-0-0`]: 'abXYcd'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = 'abXYcd';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor);
+  jest.runAllTimers();
+
+  expect(
+    editor._latestEditorState.getCurrentContent().getPlainText(),
+  ).toBe('abXYcd');
+});
+
+test('Keeps the first non-empty compositionend data', () => {
+  let content = ContentState.createFromText('abcd');
+  const blockKey = content.getFirstBlock().getKey();
+  editor._latestEditorState = EditorState.forceSelection(
+    EditorState.createWithContent(content),
+    SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 4,
+      focusOffset: 4,
+    }),
+  );
+
+  const container = document.createElement('div');
+  const blockNode = document.createElement('div');
+  blockNode.setAttribute('data-block', 'true');
+  blockNode.setAttribute('data-offset-key', `${blockKey}-0-0`);
+  blockNode.textContent = 'abcd';
+  container.appendChild(blockNode);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const selection = window.getSelection();
+  if (selection) {
+    selection.removeAllRanges();
+  }
+
+  // The DOM is left unchanged so the DOM diff returns null and the handler
+  // falls back to the compositionend data.
+  const mutations = Map({[`${blockKey}-0-0`]: 'abcdXY'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: 'XY'});
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: 'Z'});
+  jest.runAllTimers();
+
+  expect(
+    editor._latestEditorState.getCurrentContent().getPlainText(),
+  ).toBe('abcdXY');
+});

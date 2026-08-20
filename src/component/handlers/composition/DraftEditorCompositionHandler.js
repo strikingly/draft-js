@@ -203,6 +203,10 @@ function getCompositionTextFromDOM(
     return null;
   }
 
+  // Without the caret-anchored range above we cannot know which characters a
+  // replacement removed, so only accept a pure insertion (the text after the
+  // prefix is untouched) and bail out otherwise. Inserting the wrong text is
+  // worse than falling back to the normal mutation path.
   const rebuiltText =
     startText.slice(0, prefixLength) +
     composedText +
@@ -350,7 +354,15 @@ const DraftEditorCompositionHandler = {
   onCompositionEnd(editor: DraftEditor, e: ?SyntheticCompositionEvent<>): void {
     resolved = false;
     stillComposing = false;
-    if (compositionSnapshot && e && e.data) {
+    // Some IMEs fire `compositionend` multiple times for the same session
+    // (e.g. Arabic). Keep the first non-empty data so a later event cannot
+    // clobber the committed text that the DOM diff falls back to.
+    if (
+      compositionSnapshot &&
+      compositionSnapshot.composedText == null &&
+      e &&
+      e.data
+    ) {
       compositionSnapshot.composedText = e.data;
     }
     if (resolveTimer != null) {
