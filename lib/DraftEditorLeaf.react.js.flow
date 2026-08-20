@@ -16,11 +16,11 @@ import type SelectionState from "./SelectionState";
 
 const DraftEditorTextNode = require("./DraftEditorTextNode.react");
 
-const React = require("react");
-
 const invariant = require("fbjs/lib/invariant");
 
 const isHTMLBRElement = require("./isHTMLBRElement");
+
+const React = require("react");
 
 const setDraftEditorSelection = require("./setDraftEditorSelection").setDraftEditorSelection;
 

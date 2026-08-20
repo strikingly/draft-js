@@ -17,6 +17,7 @@ jest.useFakeTimers();
 
 const ContentBlock = require('ContentBlock');
 const ContentState = require('ContentState');
+const DraftModifier = require('DraftModifier');
 const EditorState = require('EditorState');
 const SelectionState = require('SelectionState');
 
@@ -76,6 +77,43 @@ function editorTextContent() {
   return editor._latestEditorState.getCurrentContent().getPlainText();
 }
 
+function getLinkEditorState() {
+  let content = ContentState.createFromText('你好链接');
+  const blockKey = content.getFirstBlock().getKey();
+  content = content.createEntity('LINK', 'MUTABLE', {
+    url: 'https://example.com',
+  });
+  const entityKey = content.getLastCreatedEntityKey();
+  content = DraftModifier.applyEntity(
+    content,
+    SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 2,
+      focusOffset: 4,
+    }),
+    entityKey,
+  );
+  const editorState = EditorState.createWithContent(content);
+  const caret = SelectionState.createEmpty(blockKey).merge({
+    anchorOffset: 4,
+    focusOffset: 4,
+  });
+  return {
+    editorState: EditorState.forceSelection(editorState, caret),
+    blockKey,
+    entityKey,
+  };
+}
+
+function getCompositionContainer(blockKey: string) {
+  const container = document.createElement('div');
+  const blockNode = document.createElement('div');
+  blockNode.setAttribute('data-block', 'true');
+  blockNode.setAttribute('data-offset-key', `${blockKey}-0-0`);
+  blockNode.textContent = '你好链接';
+  container.appendChild(blockNode);
+  return {container, blockNode};
+}
+
 function withGlobalGetSelectionAs(getSelectionValue, callback) {
   const oldGetSelection = global.getSelection;
   try {
@@ -91,13 +129,17 @@ beforeEach(() => {
   compositionHandler = require('DraftEditorCompositionHandler');
   editor = {
     _latestEditorState: EditorState.createEmpty(),
-    _onCompositionStart: compositionHandler.onCompositionStart,
+    _onCompositionStart: () => compositionHandler.onCompositionStart(editor),
     _onKeyDown: jest.fn(),
     setMode: jest.fn(),
     restoreEditorDOM: jest.fn(),
     exitCurrentMode: jest.fn(),
     update: jest.fn(state => (editor._latestEditorState = state)),
   };
+});
+
+afterEach(() => {
+  require('getContentEditableContainer').mockReset();
 });
 
 test('isInCompositionMode is properly updated on composition events', () => {
@@ -187,4 +229,358 @@ test('Can handle mutations in the same block in multiple leaf nodes', () => {
 
     expect(editorTextContent()).toBe('reacta draftbb graphqlccc');
   });
+});
+
+test('Repairs composed text committed after a LINK entity', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接中文'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接中文';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: '中文'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接中文');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+});
+
+test('Uses the DOM diff when compositionend data only contains the final syllable', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+});
+
+test('Resolves a Korean composition from the DOM when a keydown commits it', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+
+  compositionHandler.onKeyDown(editor, {
+    which: 32,
+    preventDefault: jest.fn(),
+  });
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+  expect(editor._onKeyDown).toHaveBeenCalled();
+});
+
+test('Repairs consecutive Korean compositions started before the previous resolve', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const mutations1 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations1,
+  );
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C';
+  compositionHandler.onCompositionEnd(editor, {data: '\uD55C'});
+
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  const mutations2 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations2,
+  );
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+});
+
+test('Keeps composite mode when a Korean composition starts before the previous resolve', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const mutations1 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations1,
+  );
+  editOnCompositionStart(editor, {});
+  blockNode.textContent = '你好链接\uD55C';
+  compositionHandler.onCompositionEnd(editor, {data: '\uD55C'});
+
+  editOnCompositionStart(editor, {});
+  expect(editor.exitCurrentMode).not.toHaveBeenCalled();
+
+  blockNode.textContent = '你好链接\uD55C\uAE00';
+  const mutations2 = Map({[`${blockKey}-0-0`]: '你好链接\uD55C\uAE00'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations2,
+  );
+  compositionHandler.onCompositionEnd(editor, {data: '\uAE00'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\uD55C\uAE00');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+  expect(editor.exitCurrentMode).toHaveBeenCalledTimes(1);
+});
+
+test('Repairs consecutive Japanese compositions started before the previous resolve', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const mutations1 = Map({[`${blockKey}-0-0`]: '你好链接\u3042'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations1,
+  );
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\u3042';
+  compositionHandler.onCompositionEnd(editor, {data: '\u3042'});
+
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接\u3042\u3044';
+  const mutations2 = Map({[`${blockKey}-0-0`]: '你好链接\u3042\u3044'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations2,
+  );
+  compositionHandler.onCompositionEnd(editor, {data: '\u3044'});
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接\u3042\u3044');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+  expect(block.getEntityAt(5)).toBe(null);
+});
+
+test('Repairs composed text without compositionend data', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接中文'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接中文';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor);
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接中文');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+});
+
+test('Repairs composed text using the caret-anchored DOM diff', () => {
+  const {editorState, blockKey, entityKey} = getLinkEditorState();
+  editor._latestEditorState = editorState;
+
+  const {container, blockNode} = getCompositionContainer(blockKey);
+  require('getContentEditableContainer').mockReturnValue(container);
+  const mutations = Map({[`${blockKey}-0-0`]: '你好链接中文'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  const textNode = blockNode.firstChild;
+  if (!textNode) {
+    throw new Error('Expected a text node in the composition block');
+  }
+  const range = blockNode.ownerDocument.createRange();
+  range.setStart(textNode, 4);
+  range.collapse(true);
+  const window = blockNode.ownerDocument.defaultView;
+  const selection = window && window.getSelection();
+  if (!selection) {
+    throw new Error('Expected a native selection');
+  }
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = '你好链接中文';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor);
+  jest.runAllTimers();
+
+  const contentState = editor._latestEditorState.getCurrentContent();
+  const block = contentState.getBlockForKey(blockKey);
+  expect(block.getText()).toBe('你好链接中文');
+  expect(block.getEntityAt(2)).toBe(entityKey);
+  expect(block.getEntityAt(3)).toBe(entityKey);
+  expect(block.getEntityAt(4)).toBe(null);
+});
+
+test('Fallback DOM diff reconstructs a middle insertion without a DOM selection', () => {
+  let content = ContentState.createFromText('abcd');
+  const blockKey = content.getFirstBlock().getKey();
+  editor._latestEditorState = EditorState.forceSelection(
+    EditorState.createWithContent(content),
+    SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 2,
+      focusOffset: 2,
+    }),
+  );
+
+  const container = document.createElement('div');
+  const blockNode = document.createElement('div');
+  blockNode.setAttribute('data-block', 'true');
+  blockNode.setAttribute('data-offset-key', `${blockKey}-0-0`);
+  blockNode.textContent = 'abcd';
+  container.appendChild(blockNode);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const selection = window.getSelection();
+  if (selection) {
+    selection.removeAllRanges();
+  }
+
+  const mutations = Map({[`${blockKey}-0-0`]: 'abXYcd'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  blockNode.textContent = 'abXYcd';
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor);
+  jest.runAllTimers();
+
+  expect(
+    editor._latestEditorState.getCurrentContent().getPlainText(),
+  ).toBe('abXYcd');
+});
+
+test('Keeps the first non-empty compositionend data', () => {
+  let content = ContentState.createFromText('abcd');
+  const blockKey = content.getFirstBlock().getKey();
+  editor._latestEditorState = EditorState.forceSelection(
+    EditorState.createWithContent(content),
+    SelectionState.createEmpty(blockKey).merge({
+      anchorOffset: 4,
+      focusOffset: 4,
+    }),
+  );
+
+  const container = document.createElement('div');
+  const blockNode = document.createElement('div');
+  blockNode.setAttribute('data-block', 'true');
+  blockNode.setAttribute('data-offset-key', `${blockKey}-0-0`);
+  blockNode.textContent = 'abcd';
+  container.appendChild(blockNode);
+  require('getContentEditableContainer').mockReturnValue(container);
+
+  const selection = window.getSelection();
+  if (selection) {
+    selection.removeAllRanges();
+  }
+
+  // The DOM is left unchanged so the DOM diff returns null and the handler
+  // falls back to the compositionend data.
+  const mutations = Map({[`${blockKey}-0-0`]: 'abcdXY'});
+  require('DOMObserver').prototype.stopAndFlushMutations.mockReturnValue(
+    mutations,
+  );
+
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionStart(editor);
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: 'XY'});
+  // $FlowExpectedError[incompatible-use]
+  // $FlowExpectedError[incompatible-call]
+  compositionHandler.onCompositionEnd(editor, {data: 'Z'});
+  jest.runAllTimers();
+
+  expect(
+    editor._latestEditorState.getCurrentContent().getPlainText(),
+  ).toBe('abcdXY');
 });

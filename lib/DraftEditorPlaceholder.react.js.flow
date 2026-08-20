@@ -13,9 +13,9 @@
 import type { DraftTextAlignment } from "./DraftTextAlignment";
 import type EditorState from "./EditorState";
 
-const React = require("react");
-
 const cx = require("fbjs/lib/cx");
+
+const React = require("react");
 
 const shallowEqual = require("fbjs/lib/shallowEqual");
 

@@ -13,13 +13,13 @@
 import type { DraftBlockRenderConfig } from "./DraftBlockRenderConfig";
 import type { CoreDraftBlockType } from "./DraftBlockType";
 
-const React = require("react");
-
 const cx = require("fbjs/lib/cx");
 
 const {
   Map
 } = require("immutable");
+
+const React = require("react");
 
 type DefaultCoreDraftBlockRenderMap = Map<CoreDraftBlockType, DraftBlockRenderConfig>;
 const UL_WRAP = <ul className={cx('public/DraftStyleDefault/ul')} />;

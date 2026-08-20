@@ -8,6 +8,7 @@
 module.exports = Object.assign(
   {
     immutable: 'immutable',
+    react: 'react',
     React: 'react',
     ReactDOM: 'react-dom',
     ReactDOMComet: 'react-dom',
